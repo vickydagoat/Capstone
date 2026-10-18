@@ -1,0 +1,72 @@
+import os
+import time
+import numpy as np
+import pandas as pd
+import imdlib
+
+def download_imd(variable='tmax', start_year=2000, end_year=2024, output_dir='imd_data'):
+    """
+    Downloads IMD gridded binary files year by year with size checks and retries.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    for year in range(start_year, end_year + 1):
+        file_path = os.path.join(output_dir, f"{variable}_{year}.grd")
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 1_300_000:
+            print(f"Skipping {variable} for {year}: already downloaded.")
+            continue
+        
+        success = False
+        for attempt in range(3):
+            try:
+                print(f"Downloading {variable} for {year} (Attempt {attempt+1})...")
+                # imdlib data fetch call
+                data = imdlib.get_data(variable, start_year=year, end_year=year, fn_format='yearwise', file_dir=output_dir)
+                success = True
+                break
+            except Exception as e:
+                print(f"Error downloading: {e}")
+                time.sleep(2 * (attempt + 1))
+        
+        if not success:
+            print(f"Failed to download {variable} for {year} after multiple attempts.")
+
+def nearest_valid_cell(lat, lon, lat_grid, lon_grid, data_3d):
+    """
+    Finds the nearest valid land grid cell (ignoring ocean cells with NaN/missing values).
+    """
+    lat_idx = np.abs(lat_grid - lat).argmin()
+    lon_idx = np.abs(lon_grid - lon).argmin()
+    
+    # Check if current cell is valid, otherwise search neighboring cells
+    d_lat = lat_grid - lat
+    d_lon = lon_grid - lon
+    dist = d_lat[:, None]**2 + d_lon[None, :]**2
+    flat_indices = np.argsort(dist.ravel())
+    
+    for idx in flat_indices:
+        r, c = np.unravel_index(idx, dist.shape)
+        # Check if time series has valid data (not all NaN or missing flag 99.9)
+        series = data_3d[:, r, c]
+        if not np.all(np.isnan(series) | (series > 90)):
+            return r, c
+    return lat_idx, lon_idx
+
+def load_city_series(city_name, lat, lon, start_year=2000, end_year=2024, data_dir='imd_data'):
+    """
+    Extracts a single city's daily temperature series from the 3D IMD grid.
+    """
+    tmax_data = imdlib.open_data('tmax', start_year=start_year, end_year=end_year, fn_format='yearwise', file_dir=data_dir)
+    lat_grid = tmax_data.lat_grid
+    lon_grid = tmax_data.lon_grid
+    
+    # Extract data matrix
+    tmax_mat = tmax_data.data
+    r, c = nearest_valid_cell(lat, lon, lat_grid, lon_grid, tmax_mat)
+    
+    # Generate date range
+    dates = pd.date_range(start=f"{start_year}-01-01", end=f"{end_year}-12-31")
+    series = tmax_mat[:, r, c]
+    
+    df = pd.DataFrame({'date': dates, 'tmax': series})
+    df['city'] = city_name
+    return df
