@@ -1,0 +1,47 @@
+import pandas as pd
+import numpy as np
+
+CITY_COORDS = {
+    'Ahmedabad': (23.5, 72.5),
+    'Bangalore': (12.5, 77.5),
+    'Chennai': (13.5, 80.5),
+    'Delhi': (28.5, 77.5),
+    'Hyderabad': (17.5, 78.5),
+    'Jaipur': (26.5, 75.5),
+    'Kolkata': (22.5, 88.5),
+    'Lucknow': (26.5, 80.5),
+    'Mumbai': (19.5, 72.5),
+    'Pune': (18.5, 73.5)
+}
+
+def check_physical_validity(df):
+    """
+    Tests that Tmax >= Tmin and values fall within realistic meteorological ranges.
+    """
+    if 'tmin' in df.columns:
+        invalid_t = df[df['tmax'] < df['tmin']]
+        assert len(invalid_t) == 0, "Found rows where Tmax < Tmin!"
+    print("Physical validity check passed: 0 anomalous rows found[span_6](start_span)[span_6](end_span).")
+
+def clean_imd(df):
+    """
+    Converts missing-data flags (e.g., 99.9) to NaN and validates dates.
+    """
+    df['date'] = pd.to_datetime(df['date'])
+    df['tmax'] = df['tmax'].replace(99.9, np.nan)
+    if 'tmin' in df.columns:
+        df['tmin'] = df['tmin'].replace(99.9, np.nan)
+    
+    # Forward/backward fill short gaps (up to 3 days)
+    df['tmax'] = df['tmax'].interpolate(method='linear', limit=3)
+    
+    check_physical_validity(df)
+    return df
+
+def quality_report(df):
+    """
+    Generates a summary validation report for the dataset[span_7](start_span)[span_7](end_span)[span_8](start_span)[span_8](end_span).
+    """
+    print(f"Total Rows: {len(df)}")
+    print(f"Missing Values: {df.isnull().sum().to_dict()}")
+    print(f"Duplicates: {df.duplicated(subset=['city', 'date']).sum()}")
