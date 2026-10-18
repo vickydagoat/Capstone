@@ -1,0 +1,59 @@
+import numpy as np
+import pandas as pd
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+
+def grid_features(tmax_3d, lat_grid, lon_grid, dates):
+    """
+    Computes summer mean Tmax, 95th percentile, and frequency of days >= 40°C for each grid cell.
+    """
+    months = dates.month
+    summer_mask = (months >= 3) & (months <= 6)
+    summer_data = tmax_3d[summer_mask, :, :]
+    
+    n_lat, n_lon = tmax_3d.shape[1], tmax_3d.shape[2]
+    records = []
+    
+    for r in range(n_lat):
+        for c in range(n_lon):
+            cell_summer = summer_data[:, r, c]
+            cell_all = tmax_3d[:, r, c]
+            
+            if np.all(np.isnan(cell_all) | (cell_all > 90)):
+                continue
+                
+            mean_summer = np.nanmean(cell_summer)
+            p95 = np.nanpercentile(cell_all, 95)
+            days_ge_40 = np.nansum(cell_all >= 40.0) / (len(np.unique(dates.year)))
+            
+            records.append({
+                'lat': lat_grid[r],
+                'lon': lon_grid[c],
+                'mean_summer_tmax': mean_summer,
+                'p95_tmax': p95,
+                'days_ge_40_per_year': days_ge_40
+            })
+            
+    return pd.DataFrame(records)
+
+def cluster_cells(cell_df, k=3):
+    """
+    Standardizes features and applies K-Means clustering to classify heat stress[span_17](start_span)[span_17](end_span)[span_18](start_span)[span_18](end_span).
+    """
+    features = ['mean_summer_tmax', 'p95_tmax', 'days_ge_40_per_year']
+    X = cell_df[features].values
+    
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+    cell_df['cluster'] = kmeans.fit_predict(X_scaled)
+    
+    # Rank clusters by mean summer temperature to label Low, Moderate, High
+    cluster_means = cell_df.groupby('cluster')['mean_summer_tmax'].mean().sort_values()
+    cluster_map = {old_id: new_id for new_id, old_id in enumerate(cluster_means.index)}
+    
+    label_names = {0: 'Low heat stress', 1: 'Moderate heat stress', 2: 'High heat stress (hotspot)'}
+    cell_df['heat_stress_level'] = cell_df['cluster'].map(cluster_map).map(label_names)
+    
+    return cell_df
