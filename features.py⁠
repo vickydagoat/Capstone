@@ -1,0 +1,68 @@
+import pandas as pd
+import numpy as np
+
+def add_tnormal(df, train_start=2000, train_end=2017):
+    """
+    Computes Tnormal as the average Tmax on each day of the year over training years,
+    smoothed with a 15-day centered circular moving average.
+    """
+    df['dayofyear'] = df['date'].dt.dayofyear
+    
+    train_mask = df['date'].dt.year.between(train_start, train_end)
+    normal_df = df[train_mask].groupby(['city', 'dayofyear'])['tmax'].mean().reset_index()
+    normal_df = normal_df.rename(columns={'tmax': 'tnormal_raw'})
+    
+    df = pd.merge(df, normal_df, on=['city', 'dayofyear'], how='left')
+    
+    # Smooth with 15-day circular moving average per city
+    smoothed_list = []
+    for city, group in df.groupby('city'):
+        g = group.sort_values('dayofyear').copy()
+        # Pad for circular rolling around year end
+        pad_before = g.tail(7)
+        pad_after = g.head(7)
+        padded = pd.concat([pad_before, g, pad_after])
+        
+        smoothed = padded['tnormal_raw'].rolling(window=15, center=True).mean()
+        g['tnormal'] = smoothed.iloc[7:-7].values
+        smoothed_list.append(g)
+        
+    return pd.concat(smoothed_list).sort_values(['city', 'date']).reset_index(drop=True)
+
+def add_labels(df):
+    """
+    Applies IMD heatwave definition and severity rules[span_12](start_span)[span_12](end_span)[span_13](start_span)[span_13](end_span).
+    """
+    df['anomaly'] = df['tmax'] - df['tnormal']
+    
+    # Coastal vs Plains definition
+    coastal_cities = ['Mumbai', 'Chennai']
+    is_coastal = df['city'].isin(coastal_cities)
+    
+    # Thresholds
+    tmax_thresh = np.where(is_coastal, 37.0, 40.0)
+    abs_severe = np.where(is_coastal, 43.0, 47.0) # approx or standard rule
+    
+    # Raw single-day condition
+    dep = df['anomaly']
+    tmax = df['tmax']
+    
+    hw_raw = (tmax >= tmax_thresh) & (dep >= 4.5) | (tmax >= 45.0)
+    severe_raw = (dep > 6.4) | (tmax >= 47.0)
+    
+    df['hw_raw'] = hw_raw.astype(int)
+    
+    # Persistence rule: must hold on at least two consecutive days
+    df['heatwave'] = df.groupby('city')['hw_raw'].transform(
+        lambda x: ((x == 1) & (x.shift(1) == 1 | x.shift(-1) == 1)).astype(int)
+    )
+    
+    # Severity labels: 0=Normal, 1=Moderate, 2=Severe
+    df['severity_label'] = 0
+    mod_mask = (df['heatwave'] == 1) & (dep >= 4.5) & (dep <= 6.4)
+    sev_mask = (df['heatwave'] == 1) & ((dep > 6.4) | (tmax >= 47.0))
+    
+    df.loc[mod_mask, 'severity_label'] = 1
+    df.loc[sev_mask, 'severity_label'] = 2
+    
+    return df
