@@ -1,0 +1,14 @@
+from pathlib import Path
+from imd_loader import download_imd, load_city_series
+from cleaning import clean_imd
+
+print("Script started")
+download_imd()                      # skips files that are already complete
+df = clean_imd(load_city_series())
+
+print("\nShape:", df.shape)         # expect (91320, 6)
+print(df.groupby("city")[["tmax", "tmin"]].agg(["count", "min", "max"]))
+print(df[["city", "grid_lat", "grid_lon"]].drop_duplicates())
+
+df.to_csv(Path(__file__).parent / "imd_city_daily.csv", index=False)
+print("Saved imd_city_daily.csv")
